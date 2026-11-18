@@ -1,0 +1,227 @@
+{
+  "name": "AI PowerPoint Creator",
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "\nconst input = $input.first().json ?? {};\n\n// إذا كانت البيانات داخل الغلاف التشخيصي، نستخرجها\nconst source = input.receivedData ?? input;\n\n// البحث عن نص إجابة AI Agent داخل البيانات المتداخلة\nfunction findAIText(obj, depth = 0) {\n  if (depth > 8 || obj == null) return null;\n\n  if (typeof obj === \"string\") {\n    return obj.trim() ? obj : null;\n  }\n\n  if (Array.isArray(obj)) {\n    for (const value of obj) {\n      const found = findAIText(value, depth + 1);\n      if (found) return found;\n    }\n    return null;\n  }\n\n  if (typeof obj === \"object\") {\n    const preferredKeys = [\n      \"output\", \"text\", \"response\", \"content\",\n      \"answer\", \"result\", \"message\"\n    ];\n\n    for (const key of preferredKeys) {\n      if (obj[key] !== undefined) {\n        const found = findAIText(obj[key], depth + 1);\n        if (found) return found;\n      }\n    }\n\n    for (const value of Object.values(obj)) {\n      const found = findAIText(value, depth + 1);\n      if (found) return found;\n    }\n  }\n\n  return null;\n}\n\nconst raw = findAIText(source);\n\nif (!raw) {\n  throw new Error(\n    \"No AI text found. Received data: \" +\n    JSON.stringify(source).slice(0, 3000)\n  );\n}\n\n// تنظيف النص\nconst cleaned = raw\n  .replace(/^\\uFEFF/, \"\")\n  .replace(/```(?:json)?/gi, \"\")\n  .replace(/```/g, \"\")\n  .trim();\n\nconst start = cleaned.indexOf(\"{\");\nconst end = cleaned.lastIndexOf(\"}\");\n\nif (start === -1 || end <= start) {\n  throw new Error(\n    \"AI did not return a JSON object. Response: \" +\n    cleaned.slice(0, 3000)\n  );\n}\n\nlet result;\n\ntry {\n  result = JSON.parse(cleaned.slice(start, end + 1));\n} catch (error) {\n  throw new Error(\n    \"Invalid AI JSON: \" + error.message +\n    \"\\nResponse: \" + cleaned.slice(0, 3000)\n  );\n}\n\n// التحقق من البيانات\nif (\n  !result.title ||\n  !Array.isArray(result.slides) ||\n  result.slides.length === 0\n) {\n  throw new Error(\"Presentation must contain a title and non-empty slides array.\");\n}\n\n// تجهيز البيانات لخدمة PowerPoint\nconst slides = result.slides.map((slide, index) => {\n  const bullets = Array.isArray(slide.bullets)\n    ? slide.bullets.map(v => String(v).trim()).filter(Boolean)\n    : [];\n\n  if (!bullets.length) {\n    throw new Error(\n      \"Slide \" + (index + 1) + \" has no bullet content.\"\n    );\n  }\n\n  return {\n    title: String(slide.title || `Slide ${index + 1}`),\n    bullets,\n    example: String(slide.example || \"\")\n  };\n});\n\nreturn [{\n  json: {\n    title: String(result.title),\n    subtitle: String(result.subtitle || \"\"),\n    slides\n  }\n}];\n"
+      },
+      "name": "Parse AI JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        688,
+        -144
+      ]
+    },
+    {
+      "parameters": {
+        "formTitle": "إنشاء عرض PowerPoint بالذكاء الاصطناعي",
+        "formDescription": "اكتب موضوع العرض، وسيقوم AI Agent بإعداد المحتوى وإنشاء ملف PowerPoint قابل للتحميل.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "موضوع العرض",
+              "placeholder": "مثال: الكسور العشرية",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "المادة",
+              "placeholder": "مثال: الرياضيات"
+            },
+            {
+              "fieldLabel": "المرحلة أو الفئة المستهدفة",
+              "placeholder": "مثال: الصف الخامس"
+            },
+            {
+              "fieldLabel": "عدد الشرائح (من 4 إلى 18)",
+              "fieldType": "number",
+              "placeholder": "10",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "لغة العرض",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "العربية"
+                  },
+                  {
+                    "option": "English"
+                  }
+                ]
+              },
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "تفاصيل إضافية أو نقاط تريد تضمينها",
+              "fieldType": "textarea",
+              "placeholder": "اكتب أي تعليمات إضافية (اختياري)"
+            }
+          ]
+        },
+        "options": {
+          "appendAttribution": false,
+          "path": "ai-powerpoint-creator",
+          "useWorkflowTimezone": true
+        }
+      },
+      "name": "Form Trigger",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.3,
+      "position": [
+        112,
+        -144
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=\nCreate PowerPoint presentation content based on the following form data:\n\nPresentation Topic: {{ $json[\"موضوع العرض\"] || $json.topic || \"\" }}\n\nSubject: {{ $json[\"المادة\"] || $json.subject || \"\" }}\n\nTarget Grade / Audience: {{ $json[\"المرحلة أو الفئة المستهدفة\"] || $json.grade || \"\" }}\n\nRequested Number of Slides (content slides only, excluding the cover): {{ $json[\"عدد الشرائح (من 4 إلى 18)\"] || $json.slideCount || 10 }}\n\nPresentation Language: {{ $json[\"لغة العرض\"] || $json.language || \"العربية\" }}\n\nAdditional Details or Instructions: {{ $json[\"تفاصيل إضافية أو نقاط تريد تضمينها\"] || $json.extraDetails || \"None\" }}\n\nFollow all instructions provided in the System Message.\n\nOrganize the presentation in a logical educational sequence:\n1. Introduction to the topic and its learning objectives.\n2. Detailed explanations of the main concepts.\n3. Relevant examples and practical applications.\n4. Exercises, activities, or real-world scenarios when appropriate.\n5. Review of the key concepts and a meaningful conclusion.\n\nIMPORTANT CONTENT REQUIREMENTS:\n\n- Generate actual educational content for every slide, not just headings, keywords, or short phrases.\n- Explain every bullet point using a complete, meaningful, and informative sentence.\n- Include specific, fully developed examples directly related to the presentation topic.\n- Explain practical examples with their relevant details, steps, and final results.\n- Avoid vague headings, generic statements, placeholders, and repetitive content.\n- Ensure the content is appropriate for the specified subject and target audience.\n- Use the exact language selected by the user throughout the presentation.\n- Match the requested slide count as closely as possible.\n\nReturn valid JSON only, following the exact structure and formatting requirements specified in the System Message.\n\nDo not include any introductory text, Markdown formatting, comments, or explanations outside the JSON object.\n",
+        "hasOutputParser": false,
+        "options": {
+          "systemMessage": "\nYou are an expert educational content creator and professional PowerPoint presentation designer.\n\nYour task is to create a complete, informative, well-structured, and engaging educational presentation that is perfectly suited to the topic, subject, and target audience specified by the user.\n\nMANDATORY CONTENT RULES:\n\n1. Never generate slides containing only generic headings. Every slide must include meaningful, informative, and useful educational content.\n2. Every bullet point must communicate a specific fact, explanation, idea, or practical example. Do not use keywords or headings as standalone bullet points.\n3. Never use vague phrases such as:\n   - Case Description\n   - Steps Taken\n   - Expected Results\n   - Importance of the Topic\n   Unless they are followed by specific and meaningful explanations.\n4. Explain concepts progressively, starting with basic ideas and moving toward more advanced concepts appropriate for the target audience.\n5. Include realistic examples and practical applications directly related to the presentation topic.\n6. When providing an example, explain it completely, including the problem, relevant details, solution, and final result. Never write placeholders such as \"Practical Example 1\".\n7. Include exercises, discussion questions, and answers whenever appropriate for the subject.\n8. Each slide should contain 3 to 5 informative bullet points. Every bullet point must provide a meaningful explanation rather than a short generic phrase.\n9. Avoid repeating information across different slides.\n10. Make the presentation informative enough that students can understand and learn from it even without a teacher explaining the slides.\n11. Do not use Markdown formatting such as **, ##, or other Markdown symbols inside JSON text values.\n12. Do not use HTML entities such as &#x20; or encoded HTML characters in the content.\n13. Follow the language selected by the user. All presentation content, including titles, descriptions, bullet points, and examples, must use the selected language consistently.\n14. Use clear, grammatically correct, natural language suitable for the specified educational level.\n15. Do not generate empty slides, incomplete sentences, generic placeholders, or meaningless filler content.\n\nOUTPUT FORMAT:\n\nReturn valid JSON only. Do not include Markdown, code fences, introductory text, explanations, or any content outside the JSON object.\n\nFollow this exact structure:\n\n{\n  \"title\": \"Presentation Title\",\n  \"subtitle\": \"Presentation description and target audience\",\n  \"slides\": [\n    {\n      \"title\": \"Slide Title\",\n      \"bullets\": [\n        \"A complete and informative explanation of the first key concept.\",\n        \"A clear explanation of the second key concept.\",\n        \"A realistic and fully explained practical example.\"\n      ],\n      \"example\": \"A complete practical example with a clear explanation of the solution and final result.\"\n    }\n  ]\n}\n\nCONTENT QUALITY REQUIREMENTS:\n\n- Every slide must have a meaningful educational purpose.\n- Every bullet point must contain actual educational information.\n- Examples must be specific to the presentation topic.\n- Exercises must include clear instructions and answers when appropriate.\n- The introduction must explain the subject and its relevance.\n- The main slides must develop the topic logically and progressively.\n- The conclusion must summarize the most important learning outcomes.\n- Do not create artificial content merely to reach the requested slide count.\n- Respect the requested number of slides, preferably matching it exactly, within the allowed range of 4 to 18 content slides.\n- Do not include a cover slide inside the slides array.\n\nFINAL JSON VALIDATION:\n\nBefore returning your response, carefully validate the entire JSON object.\n\nMake sure that:\n- Every array element is separated by a comma.\n- All quotation marks and brackets are properly opened and closed.\n- There are no trailing commas.\n- All quotation marks inside text values are properly escaped.\n- There are no unescaped line breaks inside JSON strings.\n- All required fields are present.\n- The slides array contains complete and meaningful content.\n- The final response can be parsed directly using JSON.parse without errors.\n\nReturn the final valid JSON object only.\n\n\nSTRICT JSON OUTPUT RULES:\n\n1. Return one valid JSON object only.\n2. Never generate malformed JSON.\n3. Use double quotation marks for all JSON keys and string values.\n4. Never use unescaped double quotation marks inside string values.\n5. Every item in an array must be separated by a comma.\n6. Never omit commas between bullet points or slide objects.\n7. Do not add trailing commas.\n8. Close every array and object correctly.\n9. Keep all bullet points as complete strings.\n10. Do not include Markdown, code fences, comments, or explanations.\n11. Validate the complete JSON structure before returning it.\n12. The output must be directly compatible with JavaScript JSON.parse().\n\n"
+        }
+      },
+      "name": "AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        336,
+        -144
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "respondWith": "returnBinary",
+        "completionTitle": "تم إنشاء العرض بنجاح",
+        "completionMessage": "تم تجهيز ملف PowerPoint. يمكنك تنزيله الآن.",
+        "options": {
+          "formTitle": "عرض PowerPoint جاهز"
+        }
+      },
+      "name": "Download PowerPoint",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.3,
+      "position": [
+        1136,
+        -144
+      ]
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.1-flash-lite",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        408,
+        88
+      ],
+      "name": "Gemini Chat Model"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://YOUR-PPTX-SERVICE-URL/pptx",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        912,
+        -144
+      ],
+      "name": "Convert to PPTX"
+    },
+    {
+      "parameters": {
+        "content": "## AI PowerPoint Creator\nيحوّل موضوع الدرس إلى عرض PowerPoint جاهز.\n\n**الإعداد:**\n1. اربط حساب Google Gemini في عقدة Gemini Chat Model\n2. ضع رابط خدمة التحويل في عقدة Convert to PPTX\n3. فعّل الـ workflow وافتح رابط الفورم",
+        "height": 260,
+        "width": 360
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        96,
+        -460
+      ],
+      "name": "Setup Notes"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Parse AI JSON": {
+      "main": [
+        [
+          {
+            "node": "Convert to PPTX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Form Trigger": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Parse AI JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert to PPTX": {
+      "main": [
+        [
+          {
+            "node": "Download PowerPoint",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "tags": []
+}
